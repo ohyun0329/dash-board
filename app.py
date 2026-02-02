@@ -1,114 +1,79 @@
 import streamlit as st
 import pandas as pd
-import plotly.graph_objects as go
 
-# 1. 페이지 기본 설정 (한글 폰트 및 레이아웃)
-st.set_page_config(page_title="세방(주) 작업일보 통합 대시보드", layout="wide")
+# 페이지 설정
+st.set_page_config(page_title="전사 작업 현황 통합 관리", layout="wide")
 
 st.title("🏗️ 전사 작업 현황 통합 관리 시스템")
 st.markdown("---")
 
-# 2. 사이드바: 엑셀 파일 업로드
+# 사이드바 파일 업로드
 st.sidebar.header("📁 팀별 작업일보 업로드")
 heavy_file = st.sidebar.file_uploader("중량팀 일보 (.xlsx)", type=['xlsx'])
 logis_file = st.sidebar.file_uploader("물류운영팀 일보 (.xlsx)", type=['xlsx'])
 dock_file = st.sidebar.file_uploader("하역팀 일보 (.xlsx)", type=['xlsx'])
 
-# --- 데이터 처리 함수 정의 ---
-
-def process_heavy(file):
+# 공통 데이터 처리 함수 (오류 방지용)
+def safe_process(file, team_type):
     if file is None: return pd.DataFrame()
-    # 이미지 분석 결과: 2행부터 헤더가 시작되는 구조로 가정
-    df = pd.read_excel(file, skiprows=2) 
     
-    def get_remarks(row):
-        items = []
-        # 장비 투입 컬럼 확인 (이미지 내 Scheuerle, Kamag, 선박 등)
-        if row.get('축수') > 0: items.append(f"SCHEUERLE({int(row['축수'])}축)")
-        if row.get('축수.1') > 0: items.append(f"KAMAG({int(row['축수.1'])}축)")
-        # 20001호 등 특정 키워드가 포함된 경우 추가
-        if "20001" in str(row.get('작업 내용', '')): items.append("세방20001호")
-        return ", ".join(items) if items else "-"
+    try:
+        # 중량팀은 2행부터 데이터 시작, 나머지는 기본 읽기
+        skip = 2 if team_type == 'heavy' else 0
+        df = pd.read_excel(file, skiprows=skip)
+        
+        # 3팀 공통 형식으로 변환 (열이 없으면 빈칸 처리)
+        new_df = pd.DataFrame()
+        new_df['팀명'] = [team_type.upper()] * len(df)
+        
+        if team_type == 'heavy':
+            new_df['화주명'] = df.iloc[:, 0] # 첫번째 열(화주)
+            new_df['작업내용 및 진행상황'] = df.iloc[:, 1] # 두번째 열(작업내용)
+            new_df['담당자'] = df.iloc[:, 2] # 세번째 열(관리자)
+            
+            # 자가장비 비고 로직 (중량팀 특화)
+            def get_heavy_rem(row):
+                rem = []
+                # 엑셀 위치에 따라 인덱스(숫자)로 접근하여 장비 확인
+                try:
+                    if row.iloc[5] > 0: rem.append(f"SCHEUERLE({int(row.iloc[5])}축)")
+                    if row.iloc[7] > 0: rem.append(f"KAMAG({int(row.iloc[7])}축)")
+                except: pass
+                return ", ".join(rem) if rem else "-"
+            new_df['비고'] = df.apply(get_heavy_rem, axis=1)
+            
+        elif team_type == 'logis':
+            new_df['화주명'] = df.get('화주명', '-')
+            new_df['작업내용 및 진행상황'] = df.get('진행사항', '-')
+            new_df['담당자'] = df.get('담당자', '-')
+            new_df['비고'] = df.get('예정사항', '-')
+            
+        else: # 하역팀
+            new_df['화주명'] = df.get('화주명', '-')
+            new_df['작업내용 및 진행상황'] = df.get('작업형태', '-')
+            new_df['담당자'] = df.get('대리점', '-')
+            new_df['비고'] = df.get('비고', '-')
+            
+        return new_df.dropna(subset=['화주명']) # 화주가 없는 빈 줄은 삭제
+    except Exception as e:
+        st.error(f"{team_type} 파일 처리 중 오류 발생: {e}")
+        return pd.DataFrame()
 
-    res = pd.DataFrame({
-        '팀명': '중량팀',
-        '화주명': df.get('화주', '-'),
-        '작업내용 및 진행상황': df.get('작업 내용', '-'),
-        '담당자': df.get('관리자', '-'),
-        '비고': df.apply(get_remarks, axis=1)
-    })
-    return res
+# 탭 구성
+tab1, tab2, tab3, tab4 = st.tabs(["📊 종합 현황", "🚚 중량팀", "📦 물류운영팀", "⚓ 하역팀"])
 
-def process_logis(file):
-    if file is None: return pd.DataFrame()
-    df = pd.read_excel(file, skiprows=3) # 물류팀 양식에 맞춤
-    res = pd.DataFrame({
-        '팀명': '물류운영팀',
-        '화주명': df.get('화주명', '-'),
-        '작업내용 및 진행상황': df.get('진행사항', '-'),
-        '담당자': df.get('담당자', '-'),
-        '비고': df.get('예정사항', '-')
-    })
-    return res
+df_h = safe_process(heavy_file, 'heavy')
+df_l = safe_process(logis_file, 'logis')
+df_d = safe_process(dock_file, 'dock')
 
-def process_dock(file):
-    if file is None: return pd.DataFrame()
-    df = pd.read_excel(file, skiprows=2)
-    res = pd.DataFrame({
-        '팀명': '하역팀',
-        '화주명': df.get('화주명', '-'),
-        '작업내용 및 진행상황': df.get('작업형태', '-'),
-        '담당자': df.get('대리점', '-'),
-        '비고': df.get('비고', '-')
-    })
-    return res
-
-# --- 화면 구성 (탭) ---
-tab_total, tab_heavy, tab_logis, tab_dock = st.tabs(["📊 종합 현황", "🚚 중량팀", "📦 물류운영팀", "⚓ 하역팀"])
-
-# 데이터 로드
-df_h = process_heavy(heavy_file)
-df_l = process_logis(logis_file)
-df_d = process_dock(dock_file)
-
-# 1. 종합 현황 탭
-with tab_total:
+with tab1:
     if heavy_file or logis_file or dock_file:
-        col1, col2, col3 = st.columns(3)
-        combined_all = pd.concat([df_h, df_l, df_d], ignore_index=True)
-        
-        col1.metric("오늘의 총 작업", f"{len(combined_all)}건")
-        col2.metric("참여 팀", f"{sum([1 for f in [heavy_file, logis_file, dock_file] if f])}개 팀")
-        col3.metric("상태", "정상 운영")
-
-        st.subheader("🛠️ 중량팀 장비 가동 현황")
-        c_heavy1, c_heavy2 = st.columns(2)
-        
-        # 게이지 차트 (예시 수치, 실제 엑셀 합계값으로 연동 가능)
-        with c_heavy1:
-            st.write("**SCHEUERLE 축(Axle) 가동률**")
-            st.progress(0.72) # 가상 수치
-            st.caption("가동: 180축 / 전체: 248축 (72%)")
-        with c_heavy2:
-            st.write("**KAMAG 축(Axle) 가동률**")
-            st.progress(0.52) # 가상 수치
-            st.caption("가동: 70축 / 전체: 134축 (52%)")
-
-        st.divider()
+        all_df = pd.concat([df_h, df_l, df_d], ignore_index=True)
         st.subheader("📋 통합 상세 내역")
-        st.dataframe(combined_all, use_container_width=True)
+        st.dataframe(all_df, use_container_width=True)
     else:
-        st.info("사이드바에서 엑셀 파일을 업로드하면 대시보드가 생성됩니다.")
+        st.info("왼쪽에서 엑셀 파일을 업로드해주세요!")
 
-# 2~4. 팀별 상세 탭
-with tab_heavy:
-    st.subheader("🚚 중량팀 상세 데이터")
-    st.dataframe(df_h, use_container_width=True)
-
-with tab_logis:
-    st.subheader("📦 물류운영팀 상세 데이터")
-    st.dataframe(df_l, use_container_width=True)
-
-with tab_dock:
-    st.subheader("⚓ 하역팀 상세 데이터")
-    st.dataframe(df_d, use_container_width=True)
+with tab2: st.dataframe(df_h)
+with tab3: st.dataframe(df_l)
+with tab4: st.dataframe(df_d)
