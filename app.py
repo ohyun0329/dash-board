@@ -12,8 +12,8 @@ heavy_file = st.sidebar.file_uploader("경남중량팀 일보 (.xlsx)", type=['x
 logis_file = st.sidebar.file_uploader("경남물류운영팀 일보 (.xlsx)", type=['xlsx'])
 dock_file = st.sidebar.file_uploader("경남하역팀 일보 (.xlsx)", type=['xlsx'])
 
-# 3. 데이터 추출 및 필터링 함수
-def extract_clean_sections(file, team_type):
+# 3. 데이터 추출 및 제목행 완벽 제거 함수
+def extract_final_sections(file, team_type):
     if file is None: return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
     
     team_names = {'heavy': '경남중량팀', 'logis': '경남물류운영팀', 'dock': '경남하역팀'}
@@ -32,67 +32,85 @@ def extract_clean_sections(file, team_type):
             return ""
 
         if team_type == 'heavy':
-            # --- 위치 탐색 ---
-            work_indices = df[df.iloc[:, 0].astype(str).str.contains("화주", na=False)].index
-            att_title_idx = df[df.iloc[:, 0].astype(str).str.contains("2. 근태 현황", na=False)].index[0]
-            att_start_idx = df[df.iloc[:, 0].astype(str).str.contains("구 분|구분", na=False)].index[0] + 1
-            plan_title_idx = df[df.iloc[:, 0].astype(str).str.contains("3. 차기 예정 작업", na=False)].index[0]
-
+            # --- [위치 추적] ---
+            # '화주' 키워드가 들어있는 모든 행 찾기
+            header_indices = df[df.iloc[:, 0].astype(str).str.contains("화주", na=False)].index.tolist()
+            att_title_search = df[df.iloc[:, 0].astype(str).str.contains("2. 근태 현황", na=False)].index
+            
             # --- [1. 금일 작업 현황] ---
-            work_raw = df.iloc[work_indices[0]+1 : att_title_idx, :].dropna(subset=[0])
+            # 첫 번째 '화주' 제목 행 다음부터 근태 현황 전까지
+            work_start = header_indices[0] + 1
+            work_end = att_title_search[0] if not att_title_search.empty else work_start + 5
+            work_raw = df.iloc[work_start:work_end, :].dropna(subset=[0])
+            
             work_df = pd.DataFrame({
                 '팀명': t_name,
-                '화주명': work_raw.iloc[:, 0].astype(str),
-                '작업내용': work_raw.iloc[:, 1].astype(str),
-                '관리자': work_raw.iloc[:, 2].astype(str),
+                '화주명': work_raw.iloc[:, 0].astype(str).str.strip(),
+                '작업내용': work_raw.iloc[:, 1].astype(str).str.strip(),
+                '관리자': work_raw.iloc[:, 2].astype(str).str.strip(),
                 '비고(장비)': work_raw.apply(lambda r: ", ".join(filter(None, [
                     get_equip_desc(r, 5, 6, "SCH"), get_equip_desc(r, 7, 8, "KAM")
                 ])), axis=1)
             })
 
             # --- [2. 근태 현황] ---
-            att_raw = df.iloc[att_start_idx : att_start_idx+8, [0, 1, 4]].dropna(subset=[0])
-            att_df = pd.DataFrame({
-                '팀명': t_name,
-                '구분': att_raw.iloc[:, 0].astype(str),
-                '관리자': att_raw.iloc[:, 1].astype(str),
-                '인원 현황': att_raw.iloc[:, 2].astype(str)
-            })
+            att_start_search = df[df.iloc[:, 0].astype(str).str.contains("구 분|구분", na=False)].index
+            if not att_start_search.empty:
+                att_start = att_start_search[0] + 1
+                att_raw = df.iloc[att_start:att_start+7, [0, 1, 4]].dropna(subset=[0])
+                att_df = pd.DataFrame({
+                    '팀명': t_name,
+                    '구분': att_raw.iloc[:, 0].astype(str).str.strip(),
+                    '관리자': att_raw.iloc[:, 1].astype(str).str.strip(),
+                    '인원 현황': att_raw.iloc[:, 2].astype(str).str.strip()
+                })
+            else: att_df = pd.DataFrame()
 
-            # --- [3. 차기 예정 작업] ---
-            plan_raw = df.iloc[work_indices[1]+1 :, :].dropna(subset=[0])
-            plan_df = pd.DataFrame({
-                '팀명': t_name,
-                '화주명': plan_raw.iloc[:, 0].astype(str),
-                '예정내용': plan_raw.iloc[:, 1].astype(str),
-                '예정일정': plan_raw.iloc[:, 2].astype(str),
-                '비고': plan_raw.apply(lambda r: ", ".join(filter(None, [
-                    get_equip_desc(r, 5, 6, "SCH"), get_equip_desc(r, 7, 8, "KAM")
-                ])), axis=1)
-            })
+            # --- [3. 향후 예정 작업] ---
+            # 두 번째 '화주' 제목 행 다음부터 끝까지
+            if len(header_indices) > 1:
+                plan_start = header_indices[1] + 1
+                plan_raw = df.iloc[plan_start:, :].dropna(subset=[0])
+                plan_df = pd.DataFrame({
+                    '팀명': t_name,
+                    '화주명': plan_raw.iloc[:, 0].astype(str).str.strip(),
+                    '예정내용': plan_raw.iloc[:, 1].astype(str).str.strip(),
+                    '예정일정': plan_raw.iloc[:, 2].astype(str).str.strip(),
+                    '비고': plan_raw.apply(lambda r: ", ".join(filter(None, [
+                        get_equip_desc(r, 5, 6, "SCH"), get_equip_desc(r, 7, 8, "KAM")
+                    ])), axis=1)
+                })
+            else: plan_df = pd.DataFrame()
+            
         else:
-            # 타 팀 기본 로직
+            # 물류/하역팀 기본 (데이터 로드 확인용)
             work_df = pd.DataFrame({'팀명':[t_name], '화주명':['일보 참조'], '작업내용':['-'], '관리자':['-'], '비고(장비)':['-']})
             att_df = pd.DataFrame({'팀명':[t_name], '구분':['상세 확인'], '관리자':['-'], '인원 현황':['-']})
             plan_df = pd.DataFrame({'팀명':[t_name], '화주명':['-'], '예정내용':['-'], '예정일정':['-'], '비고':['-']})
 
-        # --- 제목 및 불필요한 키워드 행 강제 삭제 필터 ---
-        filter_keywords = "화주|작업 내용|예상일정|특이 사항|대기 장비|마산항|구분|관리자|기사|다기능|인원|nan|None"
+        # --- [최종 필터링: 제목 단어가 포함된 모든 행 삭제] ---
+        # 제목으로 쓰이는 키워드 목록
+        bad_words = ["화주", "작업 내용", "예정내용", "예상일정", "관리자", "구분", "특이 사항", "nan", "None", "작업내용"]
         
-        work_df = work_df[~work_df['화주명'].str.contains(filter_keywords, na=False)]
-        att_df = att_df[~att_df['구분'].str.contains(filter_keywords, na=False)]
-        plan_df = plan_df[~plan_df['화주명'].str.contains(filter_keywords, na=False)]
+        def is_real_data(val):
+            val = str(val)
+            return not any(word in val for word in bad_words)
+
+        work_df = work_df[work_df['화주명'].apply(is_real_data)].reset_index(drop=True)
+        plan_df = plan_df[plan_df['화주명'].apply(is_real_data)].reset_index(drop=True)
+        if not att_df.empty:
+            att_df = att_df[att_df['구분'].apply(is_real_data)].reset_index(drop=True)
         
-        return work_df.reset_index(drop=True), att_df.reset_index(drop=True), plan_df.reset_index(drop=True)
+        return work_df, att_df, plan_df
 
     except Exception as e:
         st.error(f"{t_name} 처리 오류: {e}")
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
 # 데이터 로드 및 출력
-h_w, h_a, h_p = extract_clean_sections(heavy_file, 'heavy')
-l_w, l_a, l_p = extract_clean_sections(logis_file, 'logis')
-d_w, d_a, d_p = extract_clean_sections(dock_file, 'dock')
+h_w, h_a, h_p = extract_final_sections(heavy_file, 'heavy')
+l_w, l_a, l_p = extract_final_sections(logis_file, 'logis')
+d_w, d_a, d_p = extract_final_sections(dock_file, 'dock')
 
 tab1, tab2, tab3, tab4 = st.tabs(["📊 종합 현황", "🚚 경남중량팀", "📦 경남물류운영팀", "⚓ 경남하역팀"])
 
