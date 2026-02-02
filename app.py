@@ -20,10 +20,9 @@ def extract_smart_sections(file, team_type):
     t_name = team_names[team_type]
     
     try:
-        # 전체 데이터를 헤더 없이 읽어옴
         df = pd.read_excel(file, header=None)
         
-        # 장비 텍스트 변환 보조 함수
+        # 장비 텍스트 변환 함수
         def get_equip_desc(row, axle_idx, ppu_idx, label):
             try:
                 axle = pd.to_numeric(row.iloc[axle_idx], errors='coerce')
@@ -33,19 +32,13 @@ def extract_smart_sections(file, team_type):
             return ""
 
         if team_type == 'heavy':
-            # --- 키워드 기반 위치 자동 찾기 ---
-            # 1. 금일 작업 현황 위치 찾기
-            work_start_idx = df[df.iloc[:, 0].astype(str).str.contains("화주", na=False)].index[0] + 1
-            # 2. 근태 현황 위치 찾기
+            # --- [1. 금일 작업 현황] 위치 추적 ---
+            work_title_search = df[df.iloc[:, 0].astype(str).str.contains("화주", na=False)]
+            work_start_idx = work_title_search.index[0] + 1
             att_title_idx = df[df.iloc[:, 0].astype(str).str.contains("2. 근태 현황", na=False)].index[0]
-            att_start_idx = df[df.iloc[:, 0].astype(str).str.contains("구 분|구분", na=False)].index[0] + 1
-            # 3. 차기 예정 작업 위치 찾기
-            plan_start_idx = df[df.iloc[:, 0].astype(str).str.contains("화주", na=False)].index[1] + 1
 
-            # --- [1. 금일 작업 현황] ---
-            # 작업 현황은 근태 현황 전까지 가져오되, 마지막 '대기 장비' 행 제외
             work_raw = df.iloc[work_start_idx : att_title_idx-1, :].dropna(subset=[0])
-            work_raw = work_raw[~work_raw.iloc[:, 0].astype(str).str.contains("대기 장비|마산항", na=False)]
+            work_raw = work_raw[~work_raw.iloc[:, 0].astype(str).str.contains("대기 장비|마산항|화주|작업 내용", na=False)]
             
             work_df = pd.DataFrame({
                 '팀명': t_name,
@@ -58,8 +51,12 @@ def extract_smart_sections(file, team_type):
             })
 
             # --- [2. 근태 현황] ---
-            # 근태 현황 제목 이후 약 7행 추출
+            att_start_search = df[df.iloc[:, 0].astype(str).str.contains("구 분|구분", na=False)]
+            att_start_idx = att_start_search.index[0] + 1
             att_raw = df.iloc[att_start_idx : att_start_idx+7, [0, 1, 4]].dropna(subset=[0])
+            # 근태 섹션에서도 제목행(구분, 관리자 등) 제외
+            att_raw = att_raw[~att_raw.iloc[:, 0].astype(str).str.contains("구분|구 분|관리자|기사", na=False)]
+            
             att_df = pd.DataFrame({
                 '팀명': t_name,
                 '구분': att_raw.iloc[:, 0].astype(str),
@@ -68,8 +65,12 @@ def extract_smart_sections(file, team_type):
             })
 
             # --- [3. 향후 예정 작업] ---
-            # 예정 작업 섹션 끝까지
+            # '화주' 키워드가 두 번째로 나오는 지점부터 시작
+            plan_start_idx = work_title_search.index[1] + 1
             plan_raw = df.iloc[plan_start_idx:, :].dropna(subset=[0])
+            # 제목행(화주, 작업 내용, 예상 일정 등) 강제 필터링
+            plan_raw = plan_raw[~plan_raw.iloc[:, 0].astype(str).str.contains("화주|작업 내용|예상 일정|특이 사항", na=False)]
+            
             plan_df = pd.DataFrame({
                 '팀명': t_name,
                 '화주명': plan_raw.iloc[:, 0].astype(str),
@@ -80,14 +81,14 @@ def extract_smart_sections(file, team_type):
                 ])), axis=1)
             })
         else:
-            # 물류/하역팀 기본 구성 (추후 필요시 상세 구현 가능)
+            # 물류/하역팀 기본 구성
             work_df = pd.DataFrame({'팀명':[t_name], '화주명':['일보 참조'], '작업내용':['-'], '관리자':['-'], '비고(장비)':['-']})
             att_df = pd.DataFrame({'팀명':[t_name], '구분':['상세 확인'], '관리자':['-'], '인원 현황':['-']})
             plan_df = pd.DataFrame({'팀명':[t_name], '화주명':['-'], '예정내용':['-'], '예정일정':['-'], '비고':['-']})
 
-        # 최종 제목 데이터(0번행 등) 필터링
-        work_df = work_df[~work_df['화주명'].str.contains("화주|None|nan", na=False)]
-        plan_df = plan_df[~plan_df['화주명'].str.contains("화주|None|nan", na=False)]
+        # 최종적으로 한 번 더 "None"이나 제목 텍스트 제거
+        work_df = work_df[~work_df['화주명'].str.contains("화주|nan|None", case=False, na=False)]
+        plan_df = plan_df[~plan_df['화주명'].str.contains("화주|nan|None", case=False, na=False)]
         
         return work_df, att_df, plan_df
 
