@@ -12,8 +12,8 @@ heavy_file = st.sidebar.file_uploader("경남중량팀 일보 (.xlsx)", type=['x
 logis_file = st.sidebar.file_uploader("경남물류운영팀 일보 (.xlsx)", type=['xlsx'])
 dock_file = st.sidebar.file_uploader("경남하역팀 일보 (.xlsx)", type=['xlsx'])
 
-# 3. 데이터 추출 핵심 함수
-def extract_smart_sections(file, team_type):
+# 3. 데이터 추출 및 필터링 함수
+def extract_clean_sections(file, team_type):
     if file is None: return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
     
     team_names = {'heavy': '경남중량팀', 'logis': '경남물류운영팀', 'dock': '경남하역팀'}
@@ -32,14 +32,14 @@ def extract_smart_sections(file, team_type):
             return ""
 
         if team_type == 'heavy':
-            # --- [1. 금일 작업 현황] 위치 추적 ---
-            work_title_search = df[df.iloc[:, 0].astype(str).str.contains("화주", na=False)]
-            work_start_idx = work_title_search.index[0] + 1
+            # --- 위치 탐색 ---
+            work_indices = df[df.iloc[:, 0].astype(str).str.contains("화주", na=False)].index
             att_title_idx = df[df.iloc[:, 0].astype(str).str.contains("2. 근태 현황", na=False)].index[0]
+            att_start_idx = df[df.iloc[:, 0].astype(str).str.contains("구 분|구분", na=False)].index[0] + 1
+            plan_title_idx = df[df.iloc[:, 0].astype(str).str.contains("3. 차기 예정 작업", na=False)].index[0]
 
-            work_raw = df.iloc[work_start_idx : att_title_idx-1, :].dropna(subset=[0])
-            work_raw = work_raw[~work_raw.iloc[:, 0].astype(str).str.contains("대기 장비|마산항|화주|작업 내용", na=False)]
-            
+            # --- [1. 금일 작업 현황] ---
+            work_raw = df.iloc[work_indices[0]+1 : att_title_idx, :].dropna(subset=[0])
             work_df = pd.DataFrame({
                 '팀명': t_name,
                 '화주명': work_raw.iloc[:, 0].astype(str),
@@ -51,12 +51,7 @@ def extract_smart_sections(file, team_type):
             })
 
             # --- [2. 근태 현황] ---
-            att_start_search = df[df.iloc[:, 0].astype(str).str.contains("구 분|구분", na=False)]
-            att_start_idx = att_start_search.index[0] + 1
-            att_raw = df.iloc[att_start_idx : att_start_idx+7, [0, 1, 4]].dropna(subset=[0])
-            # 근태 섹션에서도 제목행(구분, 관리자 등) 제외
-            att_raw = att_raw[~att_raw.iloc[:, 0].astype(str).str.contains("구분|구 분|관리자|기사", na=False)]
-            
+            att_raw = df.iloc[att_start_idx : att_start_idx+8, [0, 1, 4]].dropna(subset=[0])
             att_df = pd.DataFrame({
                 '팀명': t_name,
                 '구분': att_raw.iloc[:, 0].astype(str),
@@ -64,13 +59,8 @@ def extract_smart_sections(file, team_type):
                 '인원 현황': att_raw.iloc[:, 2].astype(str)
             })
 
-            # --- [3. 향후 예정 작업] ---
-            # '화주' 키워드가 두 번째로 나오는 지점부터 시작
-            plan_start_idx = work_title_search.index[1] + 1
-            plan_raw = df.iloc[plan_start_idx:, :].dropna(subset=[0])
-            # 제목행(화주, 작업 내용, 예상 일정 등) 강제 필터링
-            plan_raw = plan_raw[~plan_raw.iloc[:, 0].astype(str).str.contains("화주|작업 내용|예상 일정|특이 사항", na=False)]
-            
+            # --- [3. 차기 예정 작업] ---
+            plan_raw = df.iloc[work_indices[1]+1 :, :].dropna(subset=[0])
             plan_df = pd.DataFrame({
                 '팀명': t_name,
                 '화주명': plan_raw.iloc[:, 0].astype(str),
@@ -81,25 +71,28 @@ def extract_smart_sections(file, team_type):
                 ])), axis=1)
             })
         else:
-            # 물류/하역팀 기본 구성
+            # 타 팀 기본 로직
             work_df = pd.DataFrame({'팀명':[t_name], '화주명':['일보 참조'], '작업내용':['-'], '관리자':['-'], '비고(장비)':['-']})
             att_df = pd.DataFrame({'팀명':[t_name], '구분':['상세 확인'], '관리자':['-'], '인원 현황':['-']})
             plan_df = pd.DataFrame({'팀명':[t_name], '화주명':['-'], '예정내용':['-'], '예정일정':['-'], '비고':['-']})
 
-        # 최종적으로 한 번 더 "None"이나 제목 텍스트 제거
-        work_df = work_df[~work_df['화주명'].str.contains("화주|nan|None", case=False, na=False)]
-        plan_df = plan_df[~plan_df['화주명'].str.contains("화주|nan|None", case=False, na=False)]
+        # --- 제목 및 불필요한 키워드 행 강제 삭제 필터 ---
+        filter_keywords = "화주|작업 내용|예상일정|특이 사항|대기 장비|마산항|구분|관리자|기사|다기능|인원|nan|None"
         
-        return work_df, att_df, plan_df
+        work_df = work_df[~work_df['화주명'].str.contains(filter_keywords, na=False)]
+        att_df = att_df[~att_df['구분'].str.contains(filter_keywords, na=False)]
+        plan_df = plan_df[~plan_df['화주명'].str.contains(filter_keywords, na=False)]
+        
+        return work_df.reset_index(drop=True), att_df.reset_index(drop=True), plan_df.reset_index(drop=True)
 
     except Exception as e:
-        st.error(f"{t_name} 처리 중 오류: {e}")
+        st.error(f"{t_name} 처리 오류: {e}")
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
-# 데이터 로드 및 탭 구성
-h_w, h_a, h_p = extract_smart_sections(heavy_file, 'heavy')
-l_w, l_a, l_p = extract_smart_sections(logis_file, 'logis')
-d_w, d_a, d_p = extract_smart_sections(dock_file, 'dock')
+# 데이터 로드 및 출력
+h_w, h_a, h_p = extract_clean_sections(heavy_file, 'heavy')
+l_w, l_a, l_p = extract_clean_sections(logis_file, 'logis')
+d_w, d_a, d_p = extract_clean_sections(dock_file, 'dock')
 
 tab1, tab2, tab3, tab4 = st.tabs(["📊 종합 현황", "🚚 경남중량팀", "📦 경남물류운영팀", "⚓ 경남하역팀"])
 
@@ -114,8 +107,8 @@ with tab1:
         st.subheader("📅 3. 향후 예정 작업")
         st.dataframe(pd.concat([h_p, l_p, d_p], ignore_index=True), use_container_width=True)
     else:
-        st.info("왼쪽에서 파일을 업로드해 주세요.")
+        st.info("파일을 업로드하면 통합 리포트가 생성됩니다.")
 
-with tab2: st.write(h_w)
-with tab3: st.write(l_w)
-with tab4: st.write(d_w)
+with tab2: st.dataframe(h_w)
+with tab3: st.dataframe(l_w)
+with tab4: st.dataframe(d_w)
