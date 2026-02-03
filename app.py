@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 
-# 1. 페이지 설정 및 디자인 (제목열 중앙 정렬 스타일 추가)
+# 1. 페이지 설정 및 디자인
 st.set_page_config(page_title="세방(주) 경남지사 통합 관리", layout="wide")
 st.markdown("""
     <style>
@@ -13,7 +13,6 @@ st.markdown("""
         margin-bottom: 20px;
     }
     .merged-table { width: 100%; border-collapse: collapse; background: white; margin-bottom: 20px; }
-    /* 제목열(th) 스타일 수정: 가로/세로 중앙 정렬 */
     .merged-table th { 
         background-color: #003366; 
         color: white; 
@@ -31,7 +30,7 @@ st.title("🏗️ 세방(주) 경남지사 통합 작업 관리 시스템")
 
 # 2. 사이드바 파일 업로드
 st.sidebar.header("📁 팀별 일보 업로드")
-heavy_file = st.sidebar.file_uploader("🚚 경남중량팀 일보", type=['xlsx'])
+heavy_file = st.sidebar.header_uploader = st.sidebar.file_uploader("🚚 경남중량팀 일보", type=['xlsx'])
 dock_file = st.sidebar.file_uploader("⚓ 경남하역팀 일보", type=['xlsx'])
 
 # 인원 카운트 함수
@@ -70,28 +69,43 @@ def extract_data(file, team_name):
             d[col_name] = d[col_name].ffill()
             return d.dropna(subset=d.columns.difference(['팀명']), how='all').reset_index(drop=True)
 
+        # --- 1. 금일 작업 (투입인원 열 추가) ---
         if idx_w is not None:
             raw_w = df.iloc[idx_w+2:get_end(idx_w), :]
             if "중량" in team_name:
-                w_df = pd.DataFrame({'팀명': team_name, '화주/본선': raw_w.iloc[:, 0], '작업내용': raw_w.iloc[:, 1], '비고': raw_w.iloc[:, 2]})
-            else:
-                w_df = pd.DataFrame({'팀명': team_name, '화주/본선': raw_w.iloc[:, 6].fillna(raw_w.iloc[:, 0]), '작업내용': raw_w.iloc[:, 7], '비고': raw_w.iloc[:, 9]})
-            w_final = clean_section(w_df, '화주/본선')
+                w_df = pd.DataFrame({
+                    '팀명': team_name, 
+                    '화주': raw_w.iloc[:, 0], 
+                    '작업내용': raw_w.iloc[:, 1], 
+                    '투입인원': raw_w.iloc[:, 2], # 중량팀 관리자 열 활용
+                    '비고': raw_w.iloc[:, 3] if len(raw_w.columns) > 3 else "-"
+                })
+            else: # 하역팀 (8번 열이 투입인원)
+                w_df = pd.DataFrame({
+                    '팀명': team_name, 
+                    '화주': raw_w.iloc[:, 6].fillna(raw_w.iloc[:, 0]), 
+                    '작업내용': raw_w.iloc[:, 7], 
+                    '투입인원': raw_w.iloc[:, 8], # 하역팀 투입인원 열
+                    '비고': raw_w.iloc[:, 9]
+                })
+            w_final = clean_section(w_df, '화주')
         else: w_final = pd.DataFrame()
 
+        # --- 2. 예정 작업 ---
         if idx_p is not None:
             raw_p = df.iloc[idx_p+2:get_end(idx_p), :]
             if "중량" in team_name:
-                p_df = pd.DataFrame({'팀명': team_name, '화주/본선': raw_p.iloc[:, 0], '예정내용': raw_p.iloc[:, 1], '일정': raw_p.iloc[:, 2]})
+                p_df = pd.DataFrame({'팀명': team_name, '화주': raw_p.iloc[:, 0], '예정내용': raw_p.iloc[:, 1], '일정': raw_p.iloc[:, 2]})
             else:
-                p_df = pd.DataFrame({'팀명': team_name, '화주/본선': raw_p.iloc[:, 6].fillna(raw_p.iloc[:, 0]), '예정내용': raw_p.iloc[:, 7], '일정': raw_p.iloc[:, 1]})
-            p_final = clean_section(p_df, '화주/본선')
+                p_df = pd.DataFrame({'팀명': team_name, '화주': raw_p.iloc[:, 6].fillna(raw_p.iloc[:, 0]), '예정내용': raw_p.iloc[:, 7], '일정': raw_p.iloc[:, 1]})
+            p_final = clean_section(p_df, '화주')
         else: p_final = pd.DataFrame()
 
+        # --- 3. 근태 현황 ---
         if idx_a is not None:
             raw_a = df.iloc[idx_a+2:get_end(idx_a), [0, 1, 2]].dropna(subset=[0])
             a_df = pd.DataFrame({
-                '구분': raw_a.iloc[:, 0].astype(str).str.strip().replace({'본선 작업':'작업','육상 작업':'작업','연차':'휴가'}),
+                '구분': raw_a.iloc[:, 0].astype(str).str.strip().replace({'본선 작업': '작업', '육상 작업': '작업', '연차': '휴가'}),
                 '팀명': team_name,
                 '관리자 현황': raw_a.iloc[:, 1].fillna("-").astype(str),
                 '다기능 현황': raw_a.iloc[:, 2].fillna("-").astype(str)
@@ -116,23 +130,23 @@ with tabs[0]:
         st.markdown(f"""<div class="total-card"><h3>📢 경남지사 금일 투입 총원: {m_count + f_count}명</h3>
                     <p>관리자: {m_count}명 | 다기능: {f_count}명</p></div>""", unsafe_allow_html=True)
 
-        # --- 1. 금일 작업 (팀명 병합 뷰) ---
+        # --- 1. 금일 작업 (제목 수정 및 투입인원 열 추가) ---
         st.subheader("1. 금일 작업")
         all_w = pd.concat([h_w, d_w], ignore_index=True)
         if not all_w.empty:
             summary_w = all_w.groupby('팀명').agg(list).reset_index()
-            html_w = "<table class='merged-table'><tr><th>팀명</th><th>화주/본선</th><th>작업내용</th><th>비고</th></tr>"
+            html_w = "<table class='merged-table'><tr><th>팀명</th><th>화주</th><th>작업내용</th><th>투입인원</th><th>비고</th></tr>"
             for _, row in summary_w.iterrows():
-                row_span = len(row['화주/본선'])
+                row_span = len(row['화주'])
                 for i in range(row_span):
                     html_w += "<tr>"
                     if i == 0: html_w += f"<td class='cat-cell' rowspan='{row_span}'>{row['팀명']}</td>"
-                    html_w += f"<td>{row['화주/본선'][i]}</td><td>{row['작업내용'][i]}</td><td>{row['비고'][i]}</td></tr>"
+                    html_w += f"<td>{row['화주'][i]}</td><td>{row['작업내용'][i]}</td><td>{row['투입인원'][i]}</td><td>{row['비고'][i]}</td></tr>"
             st.write(html_w + "</table>", unsafe_allow_html=True)
 
         st.divider()
 
-        # --- 2. 근태 현황 (구분 병합 뷰) ---
+        # --- 2. 근태 현황 ---
         st.subheader("2. 근태 현황")
         if not all_att.empty:
             order = {'작업':0, '내무':1, '출장':2, '휴가':3}
@@ -150,16 +164,16 @@ with tabs[0]:
 
         st.divider()
 
-        # --- 3. 예정 작업 (팀명 병합 뷰) ---
+        # --- 3. 예정 작업 ---
         st.subheader("3. 예정 작업")
         all_p = pd.concat([h_p, d_p], ignore_index=True)
         if not all_p.empty:
             summary_p = all_p.groupby('팀명').agg(list).reset_index()
-            html_p = "<table class='merged-table'><tr><th>팀명</th><th>화주/본선</th><th>예정내용</th><th>일정</th></tr>"
+            html_p = "<table class='merged-table'><tr><th>팀명</th><th>화주</th><th>예정내용</th><th>일정</th></tr>"
             for _, row in summary_p.iterrows():
-                row_span = len(row['화주/본선'])
+                row_span = len(row['화주'])
                 for i in range(row_span):
                     html_p += "<tr>"
                     if i == 0: html_p += f"<td class='cat-cell' rowspan='{row_span}'>{row['팀명']}</td>"
-                    html_p += f"<td>{row['화주/본선'][i]}</td><td>{row['예정내용'][i]}</td><td>{row['일정'][i]}</td></tr>"
+                    html_p += f"<td>{row['화주'][i]}</td><td>{row['예정내용'][i]}</td><td>{row['일정'][i]}</td></tr>"
             st.write(html_p + "</table>", unsafe_allow_html=True)
