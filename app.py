@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 
-# 1. 페이지 설정 및 디자인
+# 1. 페이지 설정 및 디자인 (제목열 중앙 정렬 스타일 추가)
 st.set_page_config(page_title="세방(주) 경남지사 통합 관리", layout="wide")
 st.markdown("""
     <style>
@@ -13,8 +13,16 @@ st.markdown("""
         margin-bottom: 20px;
     }
     .merged-table { width: 100%; border-collapse: collapse; background: white; margin-bottom: 20px; }
-    .merged-table th { background-color: #003366; color: white; padding: 12px; border: 1px solid #ddd; }
-    .merged-table td { padding: 10px; border: 1px solid #ddd; text-align: center; }
+    /* 제목열(th) 스타일 수정: 가로/세로 중앙 정렬 */
+    .merged-table th { 
+        background-color: #003366; 
+        color: white; 
+        padding: 12px; 
+        border: 1px solid #ddd; 
+        text-align: center !important; 
+        vertical-align: middle !important;
+    }
+    .merged-table td { padding: 10px; border: 1px solid #ddd; text-align: center; vertical-align: middle; }
     .cat-cell { background-color: #f0f2f6; font-weight: bold; width: 120px; }
     </style>
 """, unsafe_allow_html=True)
