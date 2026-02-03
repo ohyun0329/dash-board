@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
 
 # 1. 페이지 설정 및 디자인
 st.set_page_config(page_title="세방(주) 경남지사 통합 관리", layout="wide")
@@ -38,22 +37,22 @@ def count_names(val):
     if not val or val_str in ["-", "nan", "None", ""]: return 0
     return len([n for n in val_str.replace("/", ",").split(",") if n.strip()])
 
-# 3. 데이터 추출 엔진
+# 3. 데이터 추출 엔진 (제목 기반 매핑)
 def load_data(url, team_name):
     try:
         xl = pd.ExcelFile(url)
         last_sheet = xl.sheet_names[-1]
         df = xl.parse(last_sheet, header=None)
         
-        def find_anchor(kw):
+        def find_row_idx(kw):
             series = df.iloc[:, 0].astype(str).str.replace(" ", "")
             target = kw.replace(" ", "")
             match = df[series == target].index
             return match[0] if not match.empty else None
 
-        idx_w = find_anchor("[금일 작업]")
-        idx_p = find_anchor("[예정 작업]")
-        idx_a = find_anchor("[근태 현황]")
+        idx_w = find_row_idx("[금일 작업]")
+        idx_p = find_row_idx("[예정 작업]")
+        idx_a = find_row_idx("[근태 현황]")
 
         all_indices = sorted([i for i in [idx_w, idx_p, idx_a, len(df)] if i is not None])
         def get_end(start):
@@ -61,93 +60,78 @@ def load_data(url, team_name):
                 if i > start: return i
             return len(df)
 
-        def clean_section(d, col_name):
-            if d.empty: return d
-            stops = ["화주", "본선", "구분", "내용", "입항", "인원", "nan", "None", "작업구분", "[금일", "[예정", "[근태", "항목"]
-            mask = d[col_name].astype(str).apply(lambda x: not any(s in x for s in stops) and x.strip() != "")
-            d = d[mask].copy()
-            d[col_name] = d[col_name].ffill()
-            return d.reset_index(drop=True)
-
-        # 1. 금일 작업 데이터 매핑
-        if idx_w is not None:
-            raw_w = df.iloc[idx_w+1:get_end(idx_w), :]
+        def get_mapped_df(start_idx, end_idx, mapping_dict):
+            if start_idx is None: return pd.DataFrame()
+            # 데이터 영역 추출 (제목행 포함)
+            section_df = df.iloc[start_idx+1:end_idx, :].copy()
+            # 실제 데이터가 시작되는 첫 행에서 제목 찾기
+            header_row = section_df.iloc[0].astype(str).str.replace(" ", "").tolist()
+            section_df = section_df.iloc[1:].reset_index(drop=True)
             
-            if "경남중량팀" in team_name:
-                processed_notes = []
-                for _, r in raw_w.iterrows():
-                    note_parts = []
-                    # D(3), E(4) - 쇼일레 / F(5), G(6) - 까막
-                    def safe_str(v): 
-                        val = str(v).strip().lower()
-                        return "" if val in ["nan", "none", "0", "0.0", ""] else str(v).strip()
-                    
-                    s_axle = safe_str(r[3])
-                    s_ppu = safe_str(r[4])
-                    if s_axle or s_ppu:
-                        note_parts.append(f"쇼일레({s_axle or '0'}축, {s_ppu or '0'}PPU)")
-                    
-                    k_axle = safe_str(r[5])
-                    k_ppu = safe_str(r[6])
-                    if k_axle or k_ppu:
-                        note_parts.append(f"까막({k_axle or '0'}축, {k_ppu or '0'}PPU)")
-                    
-                    # H열(7) 일반 비고
-                    h_note = safe_str(r[7])
-                    if h_note: note_parts.append(h_note)
-                    processed_notes.append(" / ".join(note_parts) if note_parts else "-")
-
-                w_df = pd.DataFrame({
-                    '팀명': team_name, '화주': raw_w.iloc[:, 0], '작업내용': raw_w.iloc[:, 1], 
-                    '투입인원': raw_w.iloc[:, 2], '비고': processed_notes
-                })
+            result_data = {'팀명': team_name}
+            for final_col, possible_names in mapping_dict.items():
+                col_idx = -1
+                for idx, h_name in enumerate(header_row):
+                    if any(p in h_name for p in possible_names):
+                        col_idx = idx
+                        break
                 
-            elif "경남하역팀" in team_name:
-                w_df = pd.DataFrame({
-                    '팀명': team_name, '화주': raw_w.iloc[:, 6].fillna(raw_w.iloc[:, 0]), 
-                    '작업내용': raw_w.iloc[:, 7], '투입인원': raw_w.iloc[:, 8], '비고': raw_w.iloc[:, 9]
-                })
-            else: # 경남물류운영팀 (열 밀림 수정: 0번 구분 제외하고 1번부터 시작)
-                w_df = pd.DataFrame({
-                    '팀명': team_name, 
-                    '화주': raw_w.iloc[:, 1],      # B열
-                    '작업내용': raw_w.iloc[:, 2],   # C열
-                    '투입인원': raw_w.iloc[:, 3],   # D열
-                    '비고': raw_w.iloc[:, 4]       # E열
-                })
-            w_final = clean_section(w_df, '화주')
-        else: w_final = pd.DataFrame()
+                if col_idx != -1:
+                    result_data[final_col] = section_df.iloc[:, col_idx]
+                else:
+                    result_data[final_col] = "-"
+            
+            res = pd.DataFrame(result_data)
+            # 필터링 및 병합 처리
+            res = res[res.iloc[:, 1].astype(str).str.strip() != "nan"].copy()
+            res.iloc[:, 1] = res.iloc[:, 1].ffill()
+            return res.reset_index(drop=True)
 
-        # 2. 근태/3. 예정 작업 생략 (변수명 오류 수정된 상태 유지)
-        if idx_a is not None:
-            raw_a = df.iloc[idx_a+1:get_end(idx_a), [0, 1, 2]].dropna(subset=[0])
-            a_df = pd.DataFrame({
-                '구분': raw_a.iloc[:, 0].astype(str).str.strip().replace({'본선 작업':'작업','육상 작업':'작업','연차':'휴가'}),
-                '팀명': team_name,
-                '관리자 현황': raw_a.iloc[:, 1].fillna("-").astype(str),
-                '기사/다기능/선원 현황': raw_a.iloc[:, 2].fillna("-").astype(str)
-            })
-            a_final = a_df[a_df['구분'].isin(['작업', '내무', '출장', '휴가'])].reset_index(drop=True)
-        else: a_final = pd.DataFrame()
+        # 1. 금일 작업 매핑
+        w_map = {'화주':['화주','본선','고객'], '작업내용':['내용','작업'], '투입인원':['인원','성명','이름']}
+        w_final = get_mapped_df(idx_w, get_end(idx_w), w_map)
+        
+        # 중량팀 특수 비고란(D~G열) 처리
+        if "경남중량팀" in team_name and idx_w is not None:
+            raw_w_data = df.iloc[idx_w+2:get_end(idx_w), :].reset_index(drop=True)
+            processed_notes = []
+            for _, r in raw_w_data.iterrows():
+                note_parts = []
+                def get_v(v): return str(v).strip() if pd.notna(v) and str(v).lower() not in ["nan", "none", "0", "0.0", ""] else ""
+                
+                # 중량팀 고정 위치: D(3), E(4), F(5), G(6)
+                s_axle, s_ppu = get_v(r[3]), get_v(r[4])
+                if s_axle or s_ppu: note_parts.append(f"쇼일레({s_axle or '0'}축, {s_ppu or '0'}PPU)")
+                
+                k_axle, k_ppu = get_v(r[5]), get_v(r[6])
+                if k_axle or k_ppu: note_parts.append(f"까막({k_axle or '0'}축, {k_ppu or '0'}PPU)")
+                
+                # 비고란(H열:7) 데이터 추가
+                h_note = get_v(r[7]) if len(r) > 7 else ""
+                if h_note: note_parts.append(h_note)
+                
+                processed_notes.append(" / ".join(note_parts) if note_parts else "-")
+            w_final['비고'] = processed_notes[:len(w_final)]
+        else:
+            w_final['비고'] = "-"
 
-        if idx_p is not None:
-            raw_p = df.iloc[idx_p+1:get_end(idx_p), :]
-            if "하역" in team_name:
-                p_df = pd.DataFrame({'팀명': team_name, '화주': raw_p.iloc[:, 6].fillna(raw_p.iloc[:, 0]), '예정내용': raw_p.iloc[:, 7], '일정': raw_p.iloc[:, 1]})
-            elif "물류" in team_name:
-                p_df = pd.DataFrame({'팀명': team_name, '화주': raw_p.iloc[:, 1], '예정내용': raw_p.iloc[:, 2], '일정': raw_p.iloc[:, 3]})
-            else:
-                p_df = pd.DataFrame({'팀명': team_name, '화주': raw_p.iloc[:, 0], '예정내용': raw_p.iloc[:, 1], '일정': raw_p.iloc[:, 2]})
-            p_final = clean_section(p_df, '화주')
-        else: p_final = pd.DataFrame()
+        # 2. 근태 현황 매핑
+        a_map = {'구분':['구분','항목'], '관리자 현황':['관리자'], '기사/다기능/선원 현황':['다기능','기사','선원','인원']}
+        a_final = get_mapped_df(idx_a, get_end(idx_a), a_map)
+
+        # 3. 예정 작업 매핑
+        p_map = {'화주':['화주','본선'], '예정내용':['내용','예정'], '일정':['일정','날짜']}
+        p_final = get_mapped_df(idx_p, get_end(idx_p), p_map)
 
         return w_final, a_final, p_final
-    except: return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+    except Exception as e:
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
-# 데이터 로드
-h_w, h_a, h_p = load_data(SHEET_URLS["경남중량팀"], "경남중량팀")
-d_w, d_a, d_p = load_data(SHEET_URLS["경남하역팀"], "경남하역팀")
-m_w, m_a, m_p = load_data(SHEET_URLS["경남물류운영팀"], "경남물류운영팀")
+# 4. 데이터 로드
+with st.spinner('구글 시트 로드 중...'):
+    h_w, h_a, h_p = load_data(SHEET_URLS["경남중량팀"], "경남중량팀")
+    d_w, d_a, d_p = load_data(SHEET_URLS["경남하역팀"], "경남하역팀")
+    m_w, m_a, m_p = load_data(SHEET_URLS["경남물류운영팀"], "경남물류운영팀")
 
 t1, t2, t3, t4 = st.tabs(["📊 종합 현황", "🚚 중량팀", "⚓ 하역팀", "📦 물류운영팀"])
 
