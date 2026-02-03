@@ -1,65 +1,57 @@
 import streamlit as st
 import pandas as pd
 
-# ... (상단 설정 및 데이터 추출 로직은 동일) ...
+# 1. 페이지 설정 및 디자인 (경남지사 명칭 적용)
+st.set_page_config(page_title="세방(주) 경남지사 통합 관리", layout="wide")
+st.markdown("""
+    <style>
+    .main { background-color: #f5f7f9; }
+    h1 { color: #003366; border-bottom: 2px solid #003366; padding-bottom: 10px; }
+    .total-card { 
+        background-color: #ffffff; padding: 20px; border-radius: 10px; 
+        border-left: 5px solid #003366; box-shadow: 2px 2px 10px rgba(0,0,0,0.1);
+        margin-bottom: 20px;
+    }
+    .merged-table { width: 100%; border-collapse: collapse; background: white; }
+    .merged-table th { background-color: #003366; color: white; padding: 12px; border: 1px solid #ddd; }
+    .merged-table td { padding: 10px; border: 1px solid #ddd; text-align: center; }
+    .cat-cell { background-color: #f0f2f6; font-weight: bold; width: 120px; }
+    </style>
+""", unsafe_allow_html=True)
 
-with tabs[0]:
-    if heavy_file or dock_file:
-        # 1, 3번 섹션은 기존 dataframe 유지
-        st.subheader("🗓️ 1. 전사 금일 작업")
-        st.dataframe(pd.concat([h_w, d_w], ignore_index=True), use_container_width=True)
+st.title("🏗️ 세방(주) 경남지사 통합 작업 관리 시스템")
+
+# 2. 사이드바 파일 업로드
+st.sidebar.header("📁 팀별 일보 업로드")
+heavy_file = st.sidebar.file_uploader("🚚 경남중량팀", type=['xlsx'])
+dock_file = st.sidebar.file_uploader("⚓ 경남하역팀", type=['xlsx'])
+
+# 3. 데이터 추출 엔진
+def extract_data_final(file, team_name):
+    if file is None: return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+    try:
+        df = pd.read_excel(file, header=None)
         
-        st.divider()
-        st.subheader("👥 2. 전사 근태 현황")
-        total_att = pd.concat([h_a, d_a], ignore_index=True)
+        # 키워드 위치 찾기 함수
+        def find_anchor(kw):
+            clean_kw = kw.replace(" ", "")
+            for col in range(min(df.shape[1], 2)): # A, B열 검색
+                mask = df.iloc[:, col].astype(str).str.replace(" ", "").str.contains(clean_kw, na=False)
+                if mask.any(): return df[mask].index[0]
+            return None
+
+        # 정확한 인덱스 찾기
+        idx_w = find_anchor("[금일작업]")
+        idx_p = find_anchor("[예정작업]")
+        idx_a = find_anchor("[근태현황]")
         
-        if not total_att.empty:
-            # 정렬 순서 적용
-            sort_order = {'작업': 0, '내무': 1, '출장': 2, '휴가': 3}
-            total_att['order'] = total_att['구분'].map(sort_order).fillna(4)
-            total_att = total_att.sort_values(['order', '팀명']).drop('order', axis=1)
+        all_idxs = sorted([i for i in [idx_w, idx_p, idx_a, len(df)] if i is not None])
+        def get_end(s):
+            for i in all_idxs:
+                if i > s: return i
+            return len(df)
 
-            # --- ✨ HTML을 이용한 완전 병합 테이블 생성 ---
-            # 같은 구분별로 그룹화하여 행 개수를 계산합니다.
-            summary = total_att.groupby('구분').agg({'팀명': list, '인원 현황': list}).reset_index()
-            summary['priority'] = summary['구분'].map(sort_order).fillna(4)
-            summary = summary.sort_values('priority')
-
-            # HTML 표 시작 (세방 스타일 블루 테마 적용)
-            html_code = """
-            <style>
-                .merged-table { width: 100%; border-collapse: collapse; font-family: sans-serif; }
-                .merged-table th { background-color: #003366; color: white; padding: 10px; border: 1px solid #ddd; }
-                .merged-table td { padding: 8px; border: 1px solid #ddd; text-align: center; }
-                .category-cell { background-color: #f8f9fa; font-weight: bold; width: 15%; }
-            </style>
-            <table class="merged-table">
-                <thead>
-                    <tr>
-                        <th>구분</th>
-                        <th>팀명</th>
-                        <th>인원 현황</th>
-                    </tr>
-                </thead>
-                <tbody>
-            """
-
-            for _, row in summary.iterrows():
-                row_span = len(row['팀명'])
-                for i in range(row_span):
-                    html_code += "<tr>"
-                    # 첫 번째 행일 때만 '구분' 칸을 만들고 rowspan 적용
-                    if i == 0:
-                        html_code += f"<td class='category-cell' rowspan='{row_span}'>{row['구분']}</td>"
-                    html_code += f"<td>{row['팀명'][i]}</td>"
-                    html_code += f"<td>{row['인원 현황'][i]}</td>"
-                    html_code += "</tr>"
-            
-            html_code += "</tbody></table>"
-            
-            # 마크다운을 통해 HTML 렌더링
-            st.write(html_code, unsafe_allow_html=True)
-        
-        st.divider()
-        st.subheader("📅 3. 전사 예정 작업")
-        st.dataframe(pd.concat([h_p, d_p], ignore_index=True), use_container_width=True)
+        # 공통 정제 함수
+        def clean_df(target_df, check_col):
+            if target_df.empty: return target_df
+            # 제목이나 구분자 줄
