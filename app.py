@@ -12,6 +12,7 @@ st.markdown("""
         border-left: 5px solid #003366; box-shadow: 2px 2px 10px rgba(0,0,0,0.1);
         margin-bottom: 20px;
     }
+    /* 테이블 공통 설정 */
     .merged-table { width: 100%; border-collapse: collapse; background: white; margin-bottom: 20px; table-layout: fixed; }
     .merged-table th { 
         background-color: #003366; color: white; padding: 12px; border: 1px solid #ddd; 
@@ -19,10 +20,11 @@ st.markdown("""
     }
     .merged-table td { padding: 10px; border: 1px solid #ddd; text-align: center; vertical-align: middle; word-break: break-all; }
     
-    /* 첫 번째 열 너비 150px 고정 */
+    /* 첫 번째 열(팀명/구분) 너비 고정 */
     .first-col { background-color: #f0f2f6; font-weight: bold; width: 150px !important; }
-    /* 근태현황 관리자/기사 현황 너비 균형 조정 */
-    .status-cell { width: 35%; }
+    
+    /* 나머지 열들에 대한 균등 배분 설정 */
+    .equal-col { width: auto; } 
     </style>
 """, unsafe_allow_html=True)
 
@@ -72,7 +74,7 @@ def load_data(url, team_name):
             d[col_name] = d[col_name].ffill()
             return d.reset_index(drop=True)
 
-        # 1. 금일 작업 (화주 제목 수정 및 투입인원 열 추가)
+        # 1. 금일 작업 데이터 매핑
         if idx_w is not None:
             raw_w = df.iloc[idx_w+1:get_end(idx_w), :]
             if "하역" in team_name:
@@ -82,7 +84,7 @@ def load_data(url, team_name):
             w_final = clean_section(w_df, '화주')
         else: w_final = pd.DataFrame()
 
-        # 2. 근태 현황 (기사, 다기능, 선원 현황 제목 수정)
+        # 2. 근태 현황 데이터 매핑
         if idx_a is not None:
             raw_a = df.iloc[idx_a+1:get_end(idx_a), [0, 1, 2]].dropna(subset=[0])
             a_df = pd.DataFrame({
@@ -94,7 +96,7 @@ def load_data(url, team_name):
             a_final = a_df[a_df['구분'].isin(['작업', '내무', '출장', '휴가'])].reset_index(drop=True)
         else: a_final = pd.DataFrame()
 
-        # 3. 예정 작업
+        # 3. 예정 작업 데이터 매핑
         if idx_p is not None:
             raw_p = df.iloc[idx_p+1:get_end(idx_p), :]
             if "하역" in team_name:
@@ -126,10 +128,12 @@ with t1:
         st.markdown(f"""<div class="total-card"><h3>📢 경남지사 금일 투입 총원: {m_total_val + f_total_val}명</h3>
                     <p>관리자: {m_total_val}명 | 기사/다기능/선원: {f_total_val}명</p></div>""", unsafe_allow_html=True)
 
+    # 1. 금일 작업
     st.subheader("1. 금일 작업")
     if not all_w.empty:
         summary_w = all_w.groupby('팀명').agg(list).reset_index()
-        html_w = "<table class='merged-table'><tr><th class='first-col'>팀명</th><th>화주</th><th>작업내용</th><th style='width:150px;'>투입인원</th><th>비고</th></tr>"
+        # 모든 th에 동일한 너비 조건을 주기 위해 width 설정을 뺌 (table-layout: fixed 영향)
+        html_w = "<table class='merged-table'><tr><th class='first-col'>팀명</th><th>화주</th><th>작업내용</th><th>투입인원</th><th>비고</th></tr>"
         for _, row in summary_w.iterrows():
             row_span = len(row['화주'])
             for i in range(row_span):
@@ -139,13 +143,16 @@ with t1:
         st.write(html_w + "</table>", unsafe_allow_html=True)
 
     st.divider()
+    
+    # 2. 근태 현황
     st.subheader("2. 근태 현황")
     if not all_att.empty:
         order = {'작업':0, '내무':1, '출장':2, '휴가':3}
         all_att['ord'] = all_att['구분'].map(order).fillna(4)
         summary_a = all_att.sort_values(['ord', '팀명']).groupby('구분').agg(list).reset_index()
         summary_a = summary_a.sort_values('구분', key=lambda x: x.map(order))
-        html_a = "<table class='merged-table'><tr><th class='first-col'>구분</th><th style='width:150px;'>팀명</th><th class='status-cell'>관리자 현황</th><th class='status-cell'>기사, 다기능, 선원 현황</th></tr>"
+        # 관리자와 기사 현황 칸 비율을 1:1로 맞추기 위해 스타일 지정
+        html_a = "<table class='merged-table'><tr><th class='first-col'>구분</th><th style='width:150px;'>팀명</th><th>관리자 현황</th><th>기사, 다기능, 선원 현황</th></tr>"
         for _, row in summary_a.iterrows():
             row_span = len(row['팀명'])
             for i in range(row_span):
@@ -155,10 +162,12 @@ with t1:
         st.write(html_a + "</table>", unsafe_allow_html=True)
 
     st.divider()
+    
+    # 3. 예정 작업
     st.subheader("3. 예정 작업")
     if not all_p.empty:
         summary_p = all_p.groupby('팀명').agg(list).reset_index()
-        html_p = "<table class='merged-table'><tr><th class='first-col'>팀명</th><th>화주</th><th>예정내용</th><th style='width:150px;'>일정</th></tr>"
+        html_p = "<table class='merged-table'><tr><th class='first-col'>팀명</th><th>화주</th><th>예정내용</th><th>일정</th></tr>"
         for _, row in summary_p.iterrows():
             row_span = len(row['화주'])
             for i in range(row_span):
