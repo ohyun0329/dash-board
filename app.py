@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 
 # 1. 페이지 설정 및 디자인
 st.set_page_config(page_title="세방(주) 경남지사 통합 관리", layout="wide")
@@ -32,7 +33,6 @@ SHEET_URLS = {
     "경남물류운영팀": "https://docs.google.com/spreadsheets/d/1RY1Eevut6CTLR3r8g9OFXz4ZePkGRjE0LaclSjYMb_s/export?format=xlsx"
 }
 
-# 인원 카운트 함수
 def count_names(val):
     val_str = str(val)
     if not val or val_str in ["-", "nan", "None", ""]: return 0
@@ -63,7 +63,7 @@ def load_data(url, team_name):
 
         def clean_section(d, col_name):
             if d.empty: return d
-            stops = ["화주", "본선", "구분", "내용", "입항", "인원", "nan", "None", "작업구분", "[금일", "[예정", "[근태"]
+            stops = ["화주", "본선", "구분", "내용", "입항", "인원", "nan", "None", "작업구분", "[금일", "[예정", "[근태", "항목"]
             mask = d[col_name].astype(str).apply(lambda x: not any(s in x for s in stops) and x.strip() != "")
             d = d[mask].copy()
             d[col_name] = d[col_name].ffill()
@@ -72,32 +72,53 @@ def load_data(url, team_name):
         # 1. 금일 작업 데이터 매핑
         if idx_w is not None:
             raw_w = df.iloc[idx_w+1:get_end(idx_w), :]
-            if "중량" in team_name:
+            
+            if "경남중량팀" in team_name:
                 processed_notes = []
                 for _, r in raw_w.iterrows():
                     note_parts = []
-                    # D:쇼축(3), E:쇼PPU(4), F:까축(5), G:까PPU(6)
-                    s_axle, s_ppu = str(r[3]), str(r[4])
-                    if s_axle not in ["nan", "None", "0", ""] or s_ppu not in ["nan", "None", "0", ""]:
-                        note_parts.append(f"쇼일레({s_axle if s_axle!='nan' else '0'}축, {s_ppu if s_ppu!='nan' else '0'}PPU)")
+                    # D(3), E(4) - 쇼일레 / F(5), G(6) - 까막
+                    def safe_str(v): 
+                        val = str(v).strip().lower()
+                        return "" if val in ["nan", "none", "0", "0.0", ""] else str(v).strip()
                     
-                    k_axle, k_ppu = str(r[5]), str(r[6])
-                    if k_axle not in ["nan", "None", "0", ""] or k_ppu not in ["nan", "None", "0", ""]:
-                        note_parts.append(f"까막({k_axle if k_axle!='nan' else '0'}축, {k_ppu if k_ppu!='nan' else '0'}PPU)")
+                    s_axle = safe_str(r[3])
+                    s_ppu = safe_str(r[4])
+                    if s_axle or s_ppu:
+                        note_parts.append(f"쇼일레({s_axle or '0'}축, {s_ppu or '0'}PPU)")
                     
-                    h_note = str(r[7]) if len(r) > 7 else "nan"
-                    if h_note not in ["nan", "None", ""]: note_parts.append(h_note)
+                    k_axle = safe_str(r[5])
+                    k_ppu = safe_str(r[6])
+                    if k_axle or k_ppu:
+                        note_parts.append(f"까막({k_axle or '0'}축, {k_ppu or '0'}PPU)")
+                    
+                    # H열(7) 일반 비고
+                    h_note = safe_str(r[7])
+                    if h_note: note_parts.append(h_note)
                     processed_notes.append(" / ".join(note_parts) if note_parts else "-")
 
-                w_df = pd.DataFrame({'팀명': team_name, '화주': raw_w.iloc[:, 0], '작업내용': raw_w.iloc[:, 1], '투입인원': raw_w.iloc[:, 2], '비고': processed_notes})
-            elif "하역" in team_name:
-                w_df = pd.DataFrame({'팀명': team_name, '화주': raw_w.iloc[:, 6].fillna(raw_w.iloc[:, 0]), '작업내용': raw_w.iloc[:, 7], '투입인원': raw_w.iloc[:, 8], '비고': raw_w.iloc[:, 9]})
-            else: # 물류운영팀
-                w_df = pd.DataFrame({'팀명': team_name, '화주': raw_w.iloc[:, 0], '작업내용': raw_w.iloc[:, 1], '투입인원': raw_w.iloc[:, 2], '비고': raw_w.iloc[:, 3] if len(raw_w.columns) > 3 else "-"})
+                w_df = pd.DataFrame({
+                    '팀명': team_name, '화주': raw_w.iloc[:, 0], '작업내용': raw_w.iloc[:, 1], 
+                    '투입인원': raw_w.iloc[:, 2], '비고': processed_notes
+                })
+                
+            elif "경남하역팀" in team_name:
+                w_df = pd.DataFrame({
+                    '팀명': team_name, '화주': raw_w.iloc[:, 6].fillna(raw_w.iloc[:, 0]), 
+                    '작업내용': raw_w.iloc[:, 7], '투입인원': raw_w.iloc[:, 8], '비고': raw_w.iloc[:, 9]
+                })
+            else: # 경남물류운영팀 (열 밀림 수정: 0번 구분 제외하고 1번부터 시작)
+                w_df = pd.DataFrame({
+                    '팀명': team_name, 
+                    '화주': raw_w.iloc[:, 1],      # B열
+                    '작업내용': raw_w.iloc[:, 2],   # C열
+                    '투입인원': raw_w.iloc[:, 3],   # D열
+                    '비고': raw_w.iloc[:, 4]       # E열
+                })
             w_final = clean_section(w_df, '화주')
         else: w_final = pd.DataFrame()
 
-        # 2. 근태 현황 데이터 매핑
+        # 2. 근태/3. 예정 작업 생략 (변수명 오류 수정된 상태 유지)
         if idx_a is not None:
             raw_a = df.iloc[idx_a+1:get_end(idx_a), [0, 1, 2]].dropna(subset=[0])
             a_df = pd.DataFrame({
@@ -109,11 +130,12 @@ def load_data(url, team_name):
             a_final = a_df[a_df['구분'].isin(['작업', '내무', '출장', '휴가'])].reset_index(drop=True)
         else: a_final = pd.DataFrame()
 
-        # 3. 예정 작업 데이터 매핑
         if idx_p is not None:
             raw_p = df.iloc[idx_p+1:get_end(idx_p), :]
             if "하역" in team_name:
                 p_df = pd.DataFrame({'팀명': team_name, '화주': raw_p.iloc[:, 6].fillna(raw_p.iloc[:, 0]), '예정내용': raw_p.iloc[:, 7], '일정': raw_p.iloc[:, 1]})
+            elif "물류" in team_name:
+                p_df = pd.DataFrame({'팀명': team_name, '화주': raw_p.iloc[:, 1], '예정내용': raw_p.iloc[:, 2], '일정': raw_p.iloc[:, 3]})
             else:
                 p_df = pd.DataFrame({'팀명': team_name, '화주': raw_p.iloc[:, 0], '예정내용': raw_p.iloc[:, 1], '일정': raw_p.iloc[:, 2]})
             p_final = clean_section(p_df, '화주')
@@ -122,11 +144,10 @@ def load_data(url, team_name):
         return w_final, a_final, p_final
     except: return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
-# 4. 데이터 로드 및 탭 구성
-with st.spinner('구글 시트에서 최신 데이터를 불러오는 중...'):
-    h_w, h_a, h_p = load_data(SHEET_URLS["경남중량팀"], "경남중량팀")
-    d_w, d_a, d_p = load_data(SHEET_URLS["경남하역팀"], "경남하역팀")
-    m_w, m_a, m_p = load_data(SHEET_URLS["경남물류운영팀"], "경남물류운영팀")
+# 데이터 로드
+h_w, h_a, h_p = load_data(SHEET_URLS["경남중량팀"], "경남중량팀")
+d_w, d_a, d_p = load_data(SHEET_URLS["경남하역팀"], "경남하역팀")
+m_w, m_a, m_p = load_data(SHEET_URLS["경남물류운영팀"], "경남물류운영팀")
 
 t1, t2, t3, t4 = st.tabs(["📊 종합 현황", "🚚 중량팀", "⚓ 하역팀", "📦 물류운영팀"])
 
@@ -141,7 +162,6 @@ with t1:
         st.markdown(f"""<div class="total-card"><h3>📢 경남지사 금일 투입 총원: {m_total_val + f_total_val}명</h3>
                     <p>관리자: {m_total_val}명 | 기사/다기능/선원: {f_total_val}명</p></div>""", unsafe_allow_html=True)
 
-    # 1. 금일 작업
     st.subheader("1. 금일 작업")
     if not all_w.empty:
         summary_w = all_w.groupby('팀명').agg(list).reset_index()
@@ -155,8 +175,6 @@ with t1:
         st.write(html_w + "</table>", unsafe_allow_html=True)
 
     st.divider()
-    
-    # 2. 근태 현황
     st.subheader("2. 근태 현황")
     if not all_att.empty:
         order = {'작업':0, '내무':1, '출장':2, '휴가':3}
@@ -173,8 +191,6 @@ with t1:
         st.write(html_a + "</table>", unsafe_allow_html=True)
 
     st.divider()
-    
-    # 3. 예정 작업
     st.subheader("3. 예정 작업")
     if not all_p.empty:
         summary_p = all_p.groupby('팀명').agg(list).reset_index()
