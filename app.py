@@ -75,7 +75,7 @@ def extract_team_data(file, team_name):
         # 제목줄 필터링
         def clean(d, col):
             if d.empty: return d
-            return d[~d[col].str.contains("화주|구분|내용", na=False)].reset_index(drop=True)
+            return d[~d[col].str.contains("화주|구분|내용|예정", na=False)].reset_index(drop=True)
 
         return clean(w_df, '화주명'), a_df, clean(p_df, '화주명')
 
@@ -95,21 +95,34 @@ with tab1:
     if heavy_file or logis_file or dock_file:
         st.subheader("🗓️ 1. 전사 금일 작업 현황")
         st.dataframe(pd.concat([h_w, l_w, d_w], ignore_index=True), use_container_width=True)
+        
         st.divider()
         st.subheader("👥 2. 전사 근태 현황")
         st.dataframe(pd.concat([h_a, l_a, d_a], ignore_index=True), use_container_width=True)
+        
+        st.divider()
+        st.subheader("📅 3. 전사 향후 예정 작업")
+        # 모든 팀의 예정 작업을 합쳐서 보여줍니다.
+        total_plan = pd.concat([h_p, l_p, d_p], ignore_index=True)
+        st.dataframe(total_plan, use_container_width=True)
     else:
         st.info("사이드바에서 파일을 업로드해 주세요.")
 
 with tab2:
     st.subheader("🚚 경남중량팀 상세")
-    st.write("금일 작업", h_w)
-    st.write("향후 예정", h_p)
+    st.write("### [금일 작업]")
+    st.dataframe(h_w, use_container_width=True)
+    st.write("### [근태 현황]")
+    st.table(h_a)
+    st.write("### [향후 예정]")
+    st.dataframe(h_p, use_container_width=True)
 
 with tab3:
     st.subheader("📦 경남물류운영팀 상세")
     st.write("금일 작업", l_w)
+    st.write("향후 예정", l_p)
 
 with tab4:
     st.subheader("⚓ 경남하역팀 상세")
     st.write("금일 작업", d_w)
+    st.write("향후 예정", d_p)
